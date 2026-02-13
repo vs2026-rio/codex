@@ -1,0 +1,87 @@
+image: mcr.microsoft.com/dotnet/sdk:8.0
+
+stages:
+  - restore
+  - build
+  - test
+  - publish
+
+variables:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+  NUGET_PACKAGES: "$CI_PROJECT_DIR/.nuget/packages"
+
+cache:
+  key: "$CI_COMMIT_REF_SLUG"
+  paths:
+    - .nuget/packages
+
+before_script:
+  - dotnet --info
+
+restore:
+  stage: restore
+  script:
+    - |
+      SOLUTION_FILE="$(find . -maxdepth 3 -name '*.sln' | head -n 1)"
+      if [ -z "$SOLUTION_FILE" ]; then
+        echo "No .sln file found."
+        exit 1
+      fi
+      echo "Using solution: $SOLUTION_FILE"
+      dotnet restore "$SOLUTION_FILE"
+
+build:
+  stage: build
+  needs: ["restore"]
+  script:
+    - |
+      SOLUTION_FILE="$(find . -maxdepth 3 -name '*.sln' | head -n 1)"
+      dotnet build "$SOLUTION_FILE" --configuration Release --no-restore
+
+unit_tests:
+  stage: test
+  needs: ["build"]
+  script:
+    - |
+      TEST_PROJECTS="$(find . -name '*Tests.csproj')"
+      if [ -z "$TEST_PROJECTS" ]; then
+        echo "No *Tests.csproj found; skipping tests."
+        exit 0
+      fi
+      for project in $TEST_PROJECTS; do
+        echo "Running tests for $project"
+        dotnet test "$project" --configuration Release --no-build --logger "trx;LogFileName=$(basename "$project").trx"
+      done
+  artifacts:
+    when: always
+    paths:
+      - "**/*.trx"
+    expire_in: 1 week
+
+publish_apphost:
+  stage: publish
+  needs: ["build"]
+  script:
+    - |
+      APPHOST_PROJECT="$(find . -name '*AppHost.csproj' | head -n 1)"
+      if [ -z "$APPHOST_PROJECT" ]; then
+        echo "No AppHost project found; skipping publish."
+        exit 0
+      fi
+      echo "Publishing Aspire AppHost: $APPHOST_PROJECT"
+      dotnet publish "$APPHOST_PROJECT" --configuration Release --no-build --output publish
+  artifacts:
+    paths:
+      - publish/
+    expire_in: 1 week
+
+# Optional manual deployment template.
+# Configure SSH variables in GitLab CI/CD settings before enabling.
+deploy_production:
+  stage: publish
+  needs: ["publish_apphost"]
+  when: manual
+  allow_failure: true
+  script:
+    - echo "Define deployment steps (SSH/Kubernetes/Azure) for your environment."
